@@ -285,7 +285,6 @@ mod dog {
     }
 }
 
-#[cfg(test)]
 pub fn prepare_template_engine<T: IntoIterator<Item = I>, I: SqlTemplate>(
     t: I,
     partials: T,
