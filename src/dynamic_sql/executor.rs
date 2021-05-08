@@ -3,7 +3,7 @@ use std::iter::FromIterator;
 
 use handlebars::Handlebars;
 use rusqlite::{Connection, Row, ToSql};
-use serde::{Serialize};
+use serde::{Serialize, Deserialize};
 
 use crate::error::Result;
 
@@ -154,7 +154,7 @@ macro_rules! new_query_type {
         $( => $($f1:ident: $t1:ty,)* )?
         $( &> $($r:ident: $rt:ty,)* )?
     ) => {
-        #[derive(Debug, Clone, PartialEq, Serialize)]
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $s<$l> {
             $( $( pub $f: Option<$t>, )* )?
             $( $( pub $f1: Option<$t1>, )* )?
@@ -250,7 +250,7 @@ mod dog {
 
     new_query_type!(
         DogUpdate, 'q,
-        => color: &'q str, weight: &'q f32,
+        => color: &'q str, weight: f32,
         &> query: DogQuery<'q>,
     );
 
@@ -346,7 +346,7 @@ mod test {
             (
                 DogUpdate {
                     color: Some("white"),
-                    weight: Some(&50.5),
+                    weight: Some(50.5),
                     ..Default::default()
                 },
                 "UPDATE dogs SET color=:color, weight=:weight",
@@ -442,7 +442,7 @@ mod test {
 
         let update = DogUpdate {
             color: Some("yellow"),
-            weight: Some(&30.2),
+            weight: Some(30.2),
             query: query.clone(),
         };
         store.update(update.clone()).unwrap();
@@ -450,7 +450,7 @@ mod test {
         let query_result = query_fn(query.clone());
         let updated = &query_result[0];
         assert_eq!(update.color.as_ref().unwrap(), &updated.color,);
-        assert_eq!(*update.weight.unwrap(), updated.weight);
+        assert_eq!(update.weight.unwrap(), updated.weight);
 
         store.delete(&dog.name).unwrap();
         let query_result = query_fn(query);
