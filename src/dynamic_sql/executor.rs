@@ -3,6 +3,7 @@ use std::iter::FromIterator;
 
 use handlebars::Handlebars;
 use rusqlite::{Connection, Row, ToSql};
+use serde::{Serialize};
 
 use crate::error::Result;
 
@@ -148,16 +149,16 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
 /// accordingly.
 #[macro_export]
 macro_rules! new_query_type {
-    ( $s:ident
-        $( -> $($f:ident: $t:ident,)* )?
-        $( => $($f1:ident: $t1:ident,)* )?
-        $( &> $($r:ident: $rt:ident,)* )?
+    ( $s:ident, $l:lifetime,
+        $( -> $($f:ident: $t:ty,)* )?
+        $( => $($f1:ident: $t1:ty,)* )?
+        $( &> $($r:ident: $rt:ty,)* )?
     ) => {
-        #[derive(Debug, Clone, PartialEq)]
-        pub struct $s<'q> {
-            $( $( pub $f: Option<&'q $t>, )* )?
-            $( $( pub $f1: Option<&'q $t1>, )* )?
-            $( $( pub $r: $rt<'q>, )* )?
+        #[derive(Debug, Clone, PartialEq, Serialize)]
+        pub struct $s<$l> {
+            $( $( pub $f: Option<$t>, )* )?
+            $( $( pub $f1: Option<$t1>, )* )?
+            $( $( pub $r: $rt, )* )?
         }
 
         impl Default for $s<'_> {
@@ -242,15 +243,15 @@ mod dog {
     }
 
     new_query_type!(
-        DogQuery
-        -> name: str, color: str,
+        DogQuery, 'q,
+        -> name: &'q str, color: &'q str,
         => weight_upper: f32, weight_lower: f32,
     );
 
     new_query_type!(
-        DogUpdate
-        => color: str, weight: f32,
-        &> query: DogQuery,
+        DogUpdate, 'q,
+        => color: &'q str, weight: &'q f32,
+        &> query: DogQuery<'q>,
     );
 
     pub struct DogStore<'reg>(Repository<'reg>);
@@ -392,8 +393,8 @@ mod test {
                 DogQuery {
                     name: Some("aaa"),
                     color: Some("white"),
-                    weight_upper: Some(&50.5),
-                    weight_lower: Some(&10.5),
+                    weight_upper: Some(50.5),
+                    weight_lower: Some(10.5),
                 },
                 "SELECT * FROM dogs WHERE name LIKE '%' || :q_name || '%' AND color=:q_color \
                 AND weight<=:weight_upper AND weight>=:weight_lower",
@@ -459,15 +460,15 @@ mod test {
     #[test]
     fn test_new_query_type() {
         new_query_type!(
-            FooQuery
-            -> name: str, color: str,
+            FooQuery, 'q,
+            -> name: &'q str, color: &'q str,
             => weight_upper: f32, weight_lower: f32,
         );
 
         new_query_type!(
-            FooUpdate
-            => name: str, color: str,
-            &> query: FooQuery,
+            FooUpdate, 'q,
+            => name: &'q str, color: &'q str,
+            &> query: FooQuery<'q>,
         );
 
         let q = FooQuery {

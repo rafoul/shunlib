@@ -8,7 +8,7 @@ edition = "2018"
 [features]
 all = ["lang", "dynamic_sql"]
 lang = ["convert_case"]
-dynamic_sql = ["lazy_static", "handlebars", "rusqlite"]
+dynamic_sql = ["lazy_static", "handlebars", "rusqlite", "serde"]
 
 [dependencies]
 thiserror = "1.0.24"
