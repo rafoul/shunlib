@@ -18,6 +18,9 @@ pub trait SqlTemplate {
 pub type DynamicParam<'k, 'v> = (&'k str, &'v dyn ToSql);
 
 pub trait RenderSql {
+    /// Note the item of the iterator is `&'p DynamicParam<'k, 'v>`, this is why `'k` and `'v`` must
+    /// lasts longer than `'p`. Because reference cannot have a longer lifetime than the data it references.
+    /// This indicates that `'k` and `'v` exists before `'p`, so they should be input parameters as well.
     fn render_dynamic_sql<'k: 'p, 'v: 'p, 'p, T, P>(&self, t: &T, params: &'p P) -> Result<String>
     where
         T: SqlTemplate,
@@ -25,16 +28,18 @@ pub trait RenderSql {
 }
 
 pub trait DynamicSqlExecutor {
-    fn query<S, P, F, T>(&self, template: &S, params: &P, f: F) -> Result<Vec<T>>
+    /// Note how the lifetime requirement is different from `render_dynamic_sql`.
+    /// The `params` here is a structure holding user inputs.
+    fn query<'p, 'k, S, P, F, T>(&self, template: &S, params: &'p P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,
-        for<'p, 'k> &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
+        &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
         F: FnMut(&Row<'_>) -> rusqlite::Result<T>;
 
-    fn execute<S, P>(&self, template: &S, params: &P) -> Result<usize>
+    fn execute<'p, 'k, S, P>(&self, template: &S, params: &'p P) -> Result<usize>
     where
         S: SqlTemplate,
-        for<'p, 'k> &'p P: Into<Vec<DynamicParam<'k, 'p>>>;
+        &'p P: Into<Vec<DynamicParam<'k, 'p>>>;
 }
 
 pub struct Repository<'reg> {
@@ -42,6 +47,9 @@ pub struct Repository<'reg> {
     handlebars: Handlebars<'reg>,
 }
 
+/// The macro is need because first of all, the value can be of different types, so they cannot be
+/// put into a `Vec` directly. And we cannot treat the value as `Option` once it becomes a `dyn` ref.
+/// So the filtering can only be done for it is placed into a `Vec`.
 #[macro_export]
 macro_rules! build_dynamic_params {
     ( $( ($key:expr, $value:expr), )+ ) => {
@@ -58,10 +66,10 @@ macro_rules! build_dynamic_params {
 }
 
 impl<'reg> RenderSql for Handlebars<'reg> {
-    fn render_dynamic_sql<'a: 'c, 'b: 'c, 'c, T, P>(&self, t: &T, params: &'c P) -> Result<String>
+    fn render_dynamic_sql<'k: 'p, 'v: 'p, 'p, T, P>(&self, t: &T, params: &'p P) -> Result<String>
     where
         T: SqlTemplate,
-        &'c P: IntoIterator<Item = &'c (&'a str, &'b dyn ToSql)>,
+        &'p P: IntoIterator<Item = &'p DynamicParam<'k, 'v>>,
     {
         let ctx = HashMap::<&str, bool>::from_iter(params.into_iter().map(|(k, _)| (*k, true)));
         Ok(self.render(t.name(), &ctx)?)
@@ -97,10 +105,10 @@ impl SqlTemplate for (&str, &str) {
 }
 
 impl<'reg> DynamicSqlExecutor for Repository<'reg> {
-    fn query<S, P, F, T>(&self, template: &S, params: &P, f: F) -> Result<Vec<T>>
+    fn query<'p, 'k, S, P, F, T>(&self, template: &S, params: &'p P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,
-        for<'p, 'k> &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
+        &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
         F: FnMut(&Row<'_>) -> rusqlite::Result<T>,
     {
         let params = params.into();
@@ -118,16 +126,64 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
         Ok(Vec::from_iter(result))
     }
 
-    fn execute<S, P>(&self, template: &S, params: &P) -> Result<usize>
+    fn execute<'p, 'k, S, P>(&self, template: &S, params: &'p P) -> Result<usize>
     where
         S: SqlTemplate,
-        for<'p, 'k> &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
+        &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
     {
         let params = params.into();
         let q = self.handlebars.render_dynamic_sql(template, &params)?;
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt.execute(params.as_slice() as &[(&str, &dyn ToSql)])?;
         Ok(result)
+    }
+}
+
+/// A DSL to define structs for holding parameters of dynamic queries. It is assumed that there
+/// are two types of queries, i.e. dynamic select and dynamic update. Because the fields appears
+/// in the `SET` clause can conflict with those in the `WHERE` clause, the parameters in the latter
+/// will thus be named differently, with a `':q_'` prefix. And an additional section is used to
+/// reuse the struct for dynamic select in the dynamic update struct.
+/// For cases not covered by this macro, one can also manually create a struct and implement the traits
+/// accordingly.
+#[macro_export]
+macro_rules! new_query_type {
+    ( $s:ident
+        $( -> $($f:ident: $t:ident,)* )?
+        $( => $($f1:ident: $t1:ident,)* )?
+        $( &> $($r:ident: $rt:ident,)* )?
+    ) => {
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct $s<'q> {
+            $( $( pub $f: Option<&'q $t>, )* )?
+            $( $( pub $f1: Option<&'q $t1>, )* )?
+            $( $( pub $r: $rt<'q>, )* )?
+        }
+
+        impl Default for $s<'_> {
+            fn default() -> Self {
+                $s {
+                    $( $( $f: None, )* )?
+                    $( $( $f1: None, )* )?
+                    $( $( $r: Default::default(), )* )?
+                }
+            }
+        }
+
+        impl<'a, 'q> From<&'a $s<'q>> for Vec<(&str, &'a dyn ToSql)> {
+            #[warn(unused_mut)]
+            fn from(q: &'a $s<'q>) -> Self {
+                 let v = build_dynamic_params!(
+                    $( $( (concat!(":q_", stringify!($f)), q.$f), )* )?
+                    $( $( (concat!(":", stringify!($f1)), q.$f1), )* )?
+                 );
+                 $(
+                    let mut v = v;
+                    $( v.append(&mut (&q.$r).into()); )*
+                 )?
+                 v
+            }
+        }
     }
 }
 
@@ -185,20 +241,17 @@ mod dog {
         pub weight: f32,
     }
 
-    #[derive(Clone)]
-    pub struct DogQuery<'q> {
-        pub name: Option<&'q str>,
-        pub color: Option<&'q str>,
-        pub weight_upper: Option<f32>,
-        pub weight_lower: Option<f32>,
-    }
+    new_query_type!(
+        DogQuery
+        -> name: str, color: str,
+        => weight_upper: f32, weight_lower: f32,
+    );
 
-    #[derive(Clone)]
-    pub struct DogUpdate<'q> {
-        pub color: Option<&'q str>,
-        pub weight: Option<&'q f32>,
-        pub query: DogQuery<'q>,
-    }
+    new_query_type!(
+        DogUpdate
+        => color: str, weight: f32,
+        &> query: DogQuery,
+    );
 
     pub struct DogStore<'reg>(Repository<'reg>);
 
@@ -241,46 +294,6 @@ mod dog {
                     weight: row.get("weight").unwrap(),
                 })
             })
-        }
-    }
-
-    impl Default for DogQuery<'_> {
-        fn default() -> Self {
-            DogQuery {
-                name: None,
-                color: None,
-                weight_lower: None,
-                weight_upper: None,
-            }
-        }
-    }
-
-    impl Default for DogUpdate<'_> {
-        fn default() -> Self {
-            DogUpdate {
-                color: None,
-                weight: None,
-                query: Default::default(),
-            }
-        }
-    }
-
-    impl<'a, 'q> From<&'a DogQuery<'q>> for Vec<(&str, &'a dyn ToSql)> {
-        fn from(q: &'a DogQuery<'q>) -> Self {
-            build_dynamic_params!(
-                (":q_name", q.name),
-                (":q_color", q.color),
-                (":weight_upper", q.weight_upper),
-                (":weight_lower", q.weight_lower),
-            )
-        }
-    }
-
-    impl<'a, 'q> From<&'a DogUpdate<'q>> for Vec<(&str, &'a dyn ToSql)> {
-        fn from(q: &'a DogUpdate<'q>) -> Self {
-            let mut v = build_dynamic_params!((":color", q.color), (":weight", q.weight),);
-            v.append(&mut (&q.query).into());
-            v
         }
     }
 }
@@ -379,8 +392,8 @@ mod test {
                 DogQuery {
                     name: Some("aaa"),
                     color: Some("white"),
-                    weight_upper: Some(50.5),
-                    weight_lower: Some(10.5),
+                    weight_upper: Some(&50.5),
+                    weight_lower: Some(&10.5),
                 },
                 "SELECT * FROM dogs WHERE name LIKE '%' || :q_name || '%' AND color=:q_color \
                 AND weight<=:weight_upper AND weight>=:weight_lower",
@@ -392,10 +405,11 @@ mod test {
                 "SELECT * FROM dogs",
             ),
         ] {
+            let params = Into::<Vec<DynamicParam>>::into(&params);
             assert_eq!(
                 q,
                 handlebars
-                    .render_dynamic_sql(&Q_DOGS_SELECT, &Into::<Vec<DynamicParam>>::into(&params))
+                    .render_dynamic_sql(&Q_DOGS_SELECT, &params)
                     .unwrap()
             )
         }
@@ -440,5 +454,37 @@ mod test {
         store.delete(&dog.name).unwrap();
         let query_result = query_fn(query);
         assert!(query_result.is_empty());
+    }
+
+    #[test]
+    fn test_new_query_type() {
+        new_query_type!(
+            FooQuery
+            -> name: str, color: str,
+            => weight_upper: f32, weight_lower: f32,
+        );
+
+        new_query_type!(
+            FooUpdate
+            => name: str, color: str,
+            &> query: FooQuery,
+        );
+
+        let q = FooQuery {
+            name: Some("aaa"),
+            ..Default::default()
+        };
+        assert_eq!(Some("aaa"), q.name);
+        assert_eq!(None, q.color);
+        assert_eq!(1, Vec::<(&str, &dyn ToSql)>::from(&q).len());
+
+        let u = FooUpdate {
+            name: Some("bbb"),
+            query: q.clone(),
+            ..Default::default()
+        };
+        assert_eq!(Some("bbb"), u.name);
+        assert_eq!(None, u.color);
+        assert_eq!(Some("aaa"), u.query.name);
     }
 }
