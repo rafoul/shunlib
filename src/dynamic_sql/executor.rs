@@ -3,78 +3,37 @@ use std::iter::FromIterator;
 
 use handlebars::Handlebars;
 use rusqlite::{Connection, Row, ToSql};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
+use crate::dynamic_sql::template::SqlTemplate;
 use crate::error::Result;
+use crate::{build_dynamic_params, new_query_type};
 
 use super::sql_helpers;
 
-pub trait SqlTemplate {
-    fn name(&self) -> &str;
-
-    fn sql(&self) -> &str;
-}
-
-/// Trait object is necessary because the values of parameters can be of different types.
-pub type DynamicParam<'k, 'v> = (&'k str, &'v dyn ToSql);
-
-pub trait RenderSql {
-    /// Note the item of the iterator is `&'p DynamicParam<'k, 'v>`, this is why `'k` and `'v`` must
-    /// lasts longer than `'p`. Because reference cannot have a longer lifetime than the data it references.
-    /// This indicates that `'k` and `'v` exists before `'p`, so they should be input parameters as well.
-    fn render_dynamic_sql<'k: 'p, 'v: 'p, 'p, T, P>(&self, t: &T, params: &'p P) -> Result<String>
-    where
-        T: SqlTemplate,
-        &'p P: IntoIterator<Item = &'p DynamicParam<'k, 'v>>;
-}
+/// The value can be of different types so it has to be boxed. The key is `'static` because we know
+/// at compile time all the possible keys of a dynamic SQL. What we do at runtime is to select the
+/// keys whose values are present.
+pub type DynamicParam<'p> = (&'static str, &'p dyn ToSql);
 
 pub trait DynamicSqlExecutor {
     /// Note how the lifetime requirement is different from `render_dynamic_sql`.
     /// The `params` here is a structure holding user inputs.
-    fn query<'p, 'k, S, P, F, T>(&self, template: &S, params: &'p P, f: F) -> Result<Vec<T>>
+    fn query<'p, S, P, F, T>(&self, template: &S, params: &'p P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,
-        &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
+        &'p P: Into<Vec<DynamicParam<'p>>>,
         F: FnMut(&Row<'_>) -> rusqlite::Result<T>;
 
-    fn execute<'p, 'k, S, P>(&self, template: &S, params: &'p P) -> Result<usize>
+    fn execute<'p, S, P>(&self, template: &S, params: &'p P) -> Result<usize>
     where
         S: SqlTemplate,
-        &'p P: Into<Vec<DynamicParam<'k, 'p>>>;
+        &'p P: Into<Vec<DynamicParam<'p>>>;
 }
 
 pub struct Repository<'reg> {
     pub conn: Connection,
     handlebars: Handlebars<'reg>,
-}
-
-/// The macro is need because first of all, the value can be of different types, so they cannot be
-/// put into a `Vec` directly. And we cannot treat the value as `Option` once it becomes a `dyn` ref.
-/// So the filtering can only be done for it is placed into a `Vec`.
-#[macro_export]
-macro_rules! build_dynamic_params {
-    ( $( ($key:expr, $value:expr), )+ ) => {
-        {
-            let mut v = Vec::<(&str, &dyn ToSql)>::new();
-            $(
-                    if $value.is_some() {
-                        v.push(($key, &$value as &dyn rusqlite::ToSql));
-                    }
-            )+
-            v
-        }
-    }
-}
-
-impl<'reg> RenderSql for Handlebars<'reg> {
-    fn render_dynamic_sql<'k: 'p, 'v: 'p, 'p, T, P>(&self, t: &T, params: &'p P) -> Result<String>
-    where
-        T: SqlTemplate,
-        &'p P: IntoIterator<Item = &'p DynamicParam<'k, 'v>>,
-    {
-        let ctx = HashMap::<&str, bool>::from_iter(params.into_iter().map(|(k, _)| (*k, true)));
-        Ok(self.render(t.name(), &ctx)?)
-    }
 }
 
 impl<'reg> Repository<'reg> {
@@ -95,25 +54,15 @@ impl<'reg> Repository<'reg> {
     }
 }
 
-impl SqlTemplate for (&str, &str) {
-    fn name(&self) -> &str {
-        self.0
-    }
-
-    fn sql(&self) -> &str {
-        self.1
-    }
-}
-
 impl<'reg> DynamicSqlExecutor for Repository<'reg> {
-    fn query<'p, 'k, S, P, F, T>(&self, template: &S, params: &'p P, f: F) -> Result<Vec<T>>
+    fn query<'p, S, P, F, T>(&self, template: &S, params: &'p P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,
-        &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
+        &'p P: Into<Vec<DynamicParam<'p>>>,
         F: FnMut(&Row<'_>) -> rusqlite::Result<T>,
     {
         let params = params.into();
-        let q = self.handlebars.render_dynamic_sql(template, &params)?;
+        let q = render_dynamic_sql(&self.handlebars, template, &params)?;
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt
             .query_map(params.as_slice() as &[(&str, &dyn ToSql)], f)?
@@ -127,65 +76,48 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
         Ok(Vec::from_iter(result))
     }
 
-    fn execute<'p, 'k, S, P>(&self, template: &S, params: &'p P) -> Result<usize>
+    fn execute<'p, S, P>(&self, template: &S, params: &'p P) -> Result<usize>
     where
         S: SqlTemplate,
-        &'p P: Into<Vec<DynamicParam<'k, 'p>>>,
+        &'p P: Into<Vec<DynamicParam<'p>>>,
     {
         let params = params.into();
-        let q = self.handlebars.render_dynamic_sql(template, &params)?;
+        let q = render_dynamic_sql(&self.handlebars, template, &params)?;
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt.execute(params.as_slice() as &[(&str, &dyn ToSql)])?;
         Ok(result)
     }
 }
 
-/// A DSL to define structs for holding parameters of dynamic queries. It is assumed that there
-/// are two types of queries, i.e. dynamic select and dynamic update. Because the fields appears
-/// in the `SET` clause can conflict with those in the `WHERE` clause, the parameters in the latter
-/// will thus be named differently, with a `':q_'` prefix. And an additional section is used to
-/// reuse the struct for dynamic select in the dynamic update struct.
-/// For cases not covered by this macro, one can also manually create a struct and implement the traits
-/// accordingly.
-#[macro_export]
-macro_rules! new_query_type {
-    ( $s:ident, $l:lifetime,
-        $( -> $($f:ident: $t:ty,)* )?
-        $( => $($f1:ident: $t1:ty,)* )?
-        $( &> $($r:ident: $rt:ty,)* )?
-    ) => {
-        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-        pub struct $s<$l> {
-            $( $( pub $f: Option<$t>, )* )?
-            $( $( pub $f1: Option<$t1>, )* )?
-            $( $( pub $r: $rt, )* )?
-        }
-
-        impl Default for $s<'_> {
-            fn default() -> Self {
-                $s {
-                    $( $( $f: None, )* )?
-                    $( $( $f1: None, )* )?
-                    $( $( $r: Default::default(), )* )?
-                }
-            }
-        }
-
-        impl<'a, 'q> From<&'a $s<'q>> for Vec<(&str, &'a dyn ToSql)> {
-            #[warn(unused_mut)]
-            fn from(q: &'a $s<'q>) -> Self {
-                 let v = build_dynamic_params!(
-                    $( $( (concat!(":q_", stringify!($f)), q.$f), )* )?
-                    $( $( (concat!(":", stringify!($f1)), q.$f1), )* )?
-                 );
-                 $(
-                    let mut v = v;
-                    $( v.append(&mut (&q.$r).into()); )*
-                 )?
-                 v
-            }
-        }
+pub fn prepare_template_engine<T: IntoIterator<Item = I>, I: SqlTemplate>(
+    t: I,
+    partials: T,
+) -> Handlebars<'static> {
+    let mut handlebars = Handlebars::new();
+    handlebars
+        .register_template_string(t.name(), t.sql())
+        .unwrap();
+    for t in partials {
+        handlebars.register_partial(t.name(), t.sql()).unwrap();
     }
+    for (name, helper) in sql_helpers() {
+        handlebars.register_helper(name, helper);
+    }
+    handlebars
+}
+
+/// It doesn't make sense to have a separate trait for this method, the bounds are confusing and redundant.
+fn render_dynamic_sql<T>(
+    handlebars: &Handlebars<'_>,
+    t: &T,
+    params: &Vec<DynamicParam<'_>>,
+) -> Result<String>
+where
+    T: SqlTemplate,
+{
+    let ctx = HashMap::<&str, bool>::from_iter(params.into_iter().map(|(k, _)| (*k, true)));
+    let rendered = handlebars.render(t.name(), &ctx)?;
+    Ok(rendered)
 }
 
 #[cfg(test)]
@@ -299,23 +231,6 @@ mod dog {
     }
 }
 
-pub fn prepare_template_engine<T: IntoIterator<Item = I>, I: SqlTemplate>(
-    t: I,
-    partials: T,
-) -> Handlebars<'static> {
-    let mut handlebars = Handlebars::new();
-    handlebars
-        .register_template_string(t.name(), t.sql())
-        .unwrap();
-    for t in partials {
-        handlebars.register_partial(t.name(), t.sql()).unwrap();
-    }
-    for (name, helper) in sql_helpers() {
-        handlebars.register_helper(name, helper);
-    }
-    handlebars
-}
-
 #[cfg(test)]
 mod test {
     use std::{env, fs};
@@ -363,9 +278,12 @@ mod test {
         {
             assert_eq!(
                 q,
-                handlebars
-                    .render_dynamic_sql(&Q_DOGS_UPDATE, &Into::<Vec<DynamicParam>>::into(&update))
-                    .unwrap()
+                render_dynamic_sql(
+                    &handlebars,
+                    &Q_DOGS_UPDATE,
+                    &Into::<Vec<DynamicParam>>::into(&update)
+                )
+                .unwrap()
             );
         }
     }
@@ -409,9 +327,7 @@ mod test {
             let params = Into::<Vec<DynamicParam>>::into(&params);
             assert_eq!(
                 q,
-                handlebars
-                    .render_dynamic_sql(&Q_DOGS_SELECT, &params)
-                    .unwrap()
+                render_dynamic_sql(&handlebars, &Q_DOGS_SELECT, &params).unwrap()
             )
         }
     }
