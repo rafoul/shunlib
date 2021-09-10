@@ -122,23 +122,19 @@ where
 mod dog {
     use std::path::Path;
 
-    use lazy_static::lazy_static;
     use rusqlite::params;
 
-    use super::*;
     use crate::new_query_type;
 
-    lazy_static! {
-        static ref DDL: Vec<&'static str> = vec![
-            "CREATE TABLE IF NOT EXISTS dogs(\
+    use super::*;
+
+    const DDL: &str = "CREATE TABLE IF NOT EXISTS dogs(\
                 name TEXT PRIMARY KEY,\
-                color TEXT,
-                weight REAL
-            )",
-            "CREATE INDEX IF NOT EXISTS dogs_color ON dogs(color)",
-            "CREATE INDEX IF NOT EXISTS dogs_weight ON dogs(weight)",
-        ];
-    }
+                color TEXT,\
+                weight REAL\
+            );
+        CREATE INDEX IF NOT EXISTS dogs_color ON dogs(color);
+        CREATE INDEX IF NOT EXISTS dogs_weight ON dogs(weight);";
 
     pub const Q_DOGS_INSERT: &str =
         "INSERT INTO dogs(name, color, weight) VALUES(:name, :color, :weight)";
@@ -194,9 +190,7 @@ mod dog {
         }
 
         pub(crate) fn init(&mut self) -> Result<()> {
-            for q in DDL.iter() {
-                self.0.conn.execute(q, [])?;
-            }
+            self.0.conn.execute(DDL, [])?;
             Ok(())
         }
 
@@ -232,9 +226,10 @@ mod dog {
 mod test {
     use std::{env, fs};
 
+    use crate::new_query_type;
+
     use super::dog::*;
     use super::*;
-    use crate::new_query_type;
 
     #[test]
     fn test_handlerbar() {

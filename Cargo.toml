@@ -8,7 +8,7 @@ edition = "2018"
 [features]
 all = ["lang", "dynamic_sql"]
 lang = ["convert_case"]
-dynamic_sql = ["lazy_static", "handlebars", "rusqlite", "serde"]
+dynamic_sql = [ "handlebars", "rusqlite", "serde"]
 
 [dependencies]
 thiserror = "1.0.24"
@@ -19,7 +19,6 @@ convert_case = { version = "0.4.0", optional = true }
 
 chrono = { version = "0.4.19", optional = true }
 
-lazy_static = { version = "1.4.0", optional = true }
 handlebars = { version = "3.5.4", optional = true }
 rusqlite = { version = "0.25.0", optional = true }
 
