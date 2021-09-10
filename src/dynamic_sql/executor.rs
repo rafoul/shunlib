@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::iter::FromIterator;
+use std::path::Path;
 
 use handlebars::Handlebars;
 use rusqlite::{Connection, Row, ToSql};
@@ -9,37 +10,57 @@ use crate::error::Result;
 
 use super::sql_helpers;
 
+/// [DynamicParam] represents a key-value pair that is going to be used in a Dynamic SQL query.
+/// Typically the end user will not construct it directly but will use query object which can be
+/// converted into a [Vec<DynamicParam>].
+///
 /// The value can be of different types so it has to be boxed. The key is `'static` because we know
-/// at compile time all the possible keys of a dynamic SQL. What we do at runtime is to select the
-/// keys whose values are present.
+/// at compile time the keys of query parameters. What we need to do at runtime is to determine which
+/// keys need to be present by checking their values.
 pub type DynamicParam<'p> = (&'static str, &'p dyn ToSql);
 
+/// [DynamicSqlExecutor] is the interface for performing Dynamic SQL queries. A query is dynamic if
+/// the final SQL can only be determined at runtime, generated from a template based on runtime parameters.
 pub trait DynamicSqlExecutor {
-    /// Note how the lifetime requirement is different from `render_dynamic_sql`.
-    /// The `params` here is a structure holding user inputs.
-    fn query<'p, S, P, F, T>(&self, template: &S, params: &'p P, f: F) -> Result<Vec<T>>
+    /// Perform a query and return result, which is handled by `f`.
+    fn query<'p, S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,
-        &'p P: Into<Vec<DynamicParam<'p>>>,
+        P: Into<Vec<DynamicParam<'p>>>,
         F: FnMut(&Row<'_>) -> rusqlite::Result<T>;
 
-    fn execute<'p, S, P>(&self, template: &S, params: &'p P) -> Result<usize>
+    /// Execute a query and returns the number of rows that are affected.
+    fn execute<'p, S, P>(&self, template: &S, params: P) -> Result<usize>
     where
         S: SqlTemplate,
-        &'p P: Into<Vec<DynamicParam<'p>>>;
+        P: Into<Vec<DynamicParam<'p>>>;
 }
 
+/// Basic construct for performing Dynamic SQL queries.
 pub struct Repository<'reg> {
     pub conn: Connection,
     handlebars: Handlebars<'reg>,
 }
 
+/// Render dynamic SQL with a reference to parameters.
+fn render_dynamic_sql<T: SqlTemplate>(
+    handlebars: &Handlebars<'_>,
+    t: &T,
+    params: &Vec<DynamicParam<'_>>,
+) -> Result<String> {
+    let ctx = HashMap::<&str, bool>::from_iter(params.into_iter().map(|(k, _)| (*k, true)));
+    let rendered = handlebars.render(t.name(), &ctx)?;
+    Ok(rendered)
+}
+
 impl<'reg> Repository<'reg> {
-    pub fn new<'a, T, I>(conn: Connection, templates: &'a T) -> Result<Self>
+    pub fn new<'a, P, T, I>(file: &P, templates: &'a T) -> Result<Self>
     where
+        P: AsRef<Path> + ?Sized,
         &'a T: IntoIterator<Item = &'a I>,
         I: SqlTemplate + 'a,
     {
+        let conn = Connection::open(file)?;
         let mut handlebars = Handlebars::new();
         for q in templates {
             handlebars.register_template_string(q.name(), q.sql())?;
@@ -53,10 +74,10 @@ impl<'reg> Repository<'reg> {
 }
 
 impl<'reg> DynamicSqlExecutor for Repository<'reg> {
-    fn query<'p, S, P, F, T>(&self, template: &S, params: &'p P, f: F) -> Result<Vec<T>>
+    fn query<'p, S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,
-        &'p P: Into<Vec<DynamicParam<'p>>>,
+        P: Into<Vec<DynamicParam<'p>>>,
         F: FnMut(&Row<'_>) -> rusqlite::Result<T>,
     {
         let params = params.into();
@@ -74,10 +95,10 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
         Ok(Vec::from_iter(result))
     }
 
-    fn execute<'p, S, P>(&self, template: &S, params: &'p P) -> Result<usize>
+    fn execute<'p, S, P>(&self, template: &S, params: P) -> Result<usize>
     where
         S: SqlTemplate,
-        &'p P: Into<Vec<DynamicParam<'p>>>,
+        P: Into<Vec<DynamicParam<'p>>>,
     {
         let params = params.into();
         let q = render_dynamic_sql(&self.handlebars, template, &params)?;
@@ -85,37 +106,6 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
         let result = stmt.execute(params.as_slice() as &[(&str, &dyn ToSql)])?;
         Ok(result)
     }
-}
-
-pub fn prepare_template_engine<T: IntoIterator<Item = I>, I: SqlTemplate>(
-    t: I,
-    partials: T,
-) -> Handlebars<'static> {
-    let mut handlebars = Handlebars::new();
-    handlebars
-        .register_template_string(t.name(), t.sql())
-        .unwrap();
-    for t in partials {
-        handlebars.register_partial(t.name(), t.sql()).unwrap();
-    }
-    for (name, helper) in sql_helpers() {
-        handlebars.register_helper(name, helper);
-    }
-    handlebars
-}
-
-/// It doesn't make sense to have a separate trait for this method, the bounds are confusing and redundant.
-pub fn render_dynamic_sql<T>(
-    handlebars: &Handlebars<'_>,
-    t: &T,
-    params: &Vec<DynamicParam<'_>>,
-) -> Result<String>
-where
-    T: SqlTemplate,
-{
-    let ctx = HashMap::<&str, bool>::from_iter(params.into_iter().map(|(k, _)| (*k, true)));
-    let rendered = handlebars.render(t.name(), &ctx)?;
-    Ok(rendered)
 }
 
 #[cfg(test)]
@@ -136,8 +126,10 @@ mod dog {
         CREATE INDEX IF NOT EXISTS dogs_color ON dogs(color);
         CREATE INDEX IF NOT EXISTS dogs_weight ON dogs(weight);";
 
-    pub const Q_DOGS_INSERT: &str =
-        "INSERT INTO dogs(name, color, weight) VALUES(:name, :color, :weight)";
+    pub const Q_DOGS_INSERT: (&str, &str) = (
+        "Q_DOGS_INSERT",
+        "INSERT INTO dogs(name, color, weight) VALUES(:name, :color, :weight)",
+    );
 
     pub const Q_DOGS_UPDATE: (&str, &str) = (
         "Q_DOGS_UPDATE",
@@ -157,7 +149,7 @@ mod dog {
         {{/where}}",
     );
 
-    pub const Q_DOGS_DELETE: &str = "DELETE FROM dogs WHERE name=?";
+    pub const Q_DOGS_DELETE: (&str, &str) = ("Q_DOGS_DELETE", "DELETE FROM dogs WHERE name=?");
 
     pub const Q_DOGS_SELECT: (&str, &str) =
         ("Q_DOGS_SELECT", "SELECT * FROM dogs{{> Q_DOGS_WHERE }}");
@@ -182,9 +174,9 @@ mod dog {
     pub struct DogStore<'reg>(Repository<'reg>);
 
     impl<'reg> DogStore<'reg> {
-        pub(crate) fn new<P: AsRef<Path>>(db_file: P) -> Result<Self> {
+        pub(crate) fn new<P: AsRef<Path>>(db_file: &P) -> Result<Self> {
             Ok(DogStore(Repository::new(
-                Connection::open(db_file)?,
+                db_file,
                 &[Q_DOGS_SELECT, Q_DOGS_UPDATE, Q_DOGS_WHERE],
             )?))
         }
@@ -195,13 +187,13 @@ mod dog {
         }
 
         pub(crate) fn add(&self, dog: Dog) -> Result<()> {
-            let mut stmt = self.0.conn.prepare(Q_DOGS_INSERT)?;
+            let mut stmt = self.0.conn.prepare(Q_DOGS_INSERT.sql())?;
             stmt.execute(params!(dog.name, dog.color, dog.weight,))?;
             Ok(())
         }
 
         pub(crate) fn delete<T: AsRef<str>>(&self, dog_id: T) -> Result<usize> {
-            let mut stmt = self.0.conn.prepare(Q_DOGS_DELETE)?;
+            let mut stmt = self.0.conn.prepare(Q_DOGS_DELETE.sql())?;
             let c = stmt.execute([dog_id.as_ref()])?;
             Ok(c)
         }
@@ -249,7 +241,7 @@ mod test {
 
     #[test]
     fn test_update_query_template() {
-        let handlebars = prepare_template_engine(Q_DOGS_UPDATE, vec![Q_DOGS_WHERE]);
+        let handlebars = get_template_engine();
         for (update, q) in vec![
             (
                 DogUpdate {
@@ -283,7 +275,7 @@ mod test {
 
     #[test]
     fn test_select_query_template() {
-        let handlebars = prepare_template_engine(Q_DOGS_SELECT, vec![Q_DOGS_WHERE]);
+        let handlebars = get_template_engine();
         for (params, q) in vec![
             (
                 DogQuery {
@@ -394,5 +386,21 @@ mod test {
         assert_eq!(Some("bbb"), u.name);
         assert_eq!(None, u.color);
         assert_eq!(Some("aaa"), u.query.name);
+    }
+
+    fn get_template_engine() -> Handlebars<'static> {
+        let mut handlebars = Handlebars::new();
+        for t in vec![Q_DOGS_INSERT, Q_DOGS_DELETE, Q_DOGS_SELECT, Q_DOGS_UPDATE] {
+            handlebars
+                .register_template_string(t.name(), t.sql())
+                .unwrap();
+        }
+        for t in vec![Q_DOGS_WHERE] {
+            handlebars.register_partial(t.name(), t.sql()).unwrap();
+        }
+        for (name, helper) in sql_helpers() {
+            handlebars.register_helper(name, helper);
+        }
+        handlebars
     }
 }
