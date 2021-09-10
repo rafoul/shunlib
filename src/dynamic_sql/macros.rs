@@ -21,11 +21,20 @@ macro_rules! build_dynamic_params {
 /// `&>`: fields that reference other query types.
 #[macro_export]
 macro_rules! new_query_type {
-    ( $s:ident, $l:lifetime,
-        $( -> $($f:ident: $t:ty,)* )?
-        $( => $($f1:ident: $t1:ty,)* )?
-        $( &> $($r:ident: $rt:ty,)* )?
+    (
+        $(
+            (
+                $s:ident, $l:lifetime,
+                $( -> $($f:ident: $t:ty,)* )?
+                $( => $($f1:ident: $t1:ty,)* )?
+                $( &> $($r:ident: $rt:ty,)* )?
+            )
+        )+
     ) => {
+        use serde::{Deserialize, Serialize};
+        use $crate::build_dynamic_params;
+
+        $(
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $s<$l> {
             $( $( pub $f: Option<$t>, )* )?
@@ -57,5 +66,6 @@ macro_rules! new_query_type {
                  v
             }
         }
+        )+
     }
 }

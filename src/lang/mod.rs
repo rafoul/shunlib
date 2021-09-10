@@ -1,13 +1,12 @@
-mod enum_support;
-
 #[macro_export]
 macro_rules! enum_to_str {
-    ($name:ident, $default:ident, $($var:ident,)+) => {
+    ($vis:vis $name:ident, $default:ident, $($var:ident,)+) => {
         use convert_case::{Case, Casing};
         use core::fmt::{Display, Formatter};
+        use serde::{Serialize, Deserialize};
 
         #[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
-        pub(crate) enum $name {
+        $vis enum $name {
             $($var,)+
             $default,
         }
@@ -30,6 +29,26 @@ macro_rules! enum_to_str {
                 };
                 write!(f, "{}", s)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    enum_to_str!(
+        pub Color, White, Red, Green,
+    );
+
+    #[test]
+    fn test_enum_to_str() {
+        let values = vec![
+            ("white", Color::White),
+            ("GREEN", Color::Green),
+            ("Red", Color::Red),
+            ("asdf", Color::White),
+        ];
+        for (v, expected) in values {
+            assert_eq!(expected, Color::from(v));
         }
     }
 }

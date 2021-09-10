@@ -3,11 +3,9 @@ use std::iter::FromIterator;
 
 use handlebars::Handlebars;
 use rusqlite::{Connection, Row, ToSql};
-use serde::{Deserialize, Serialize};
 
 use crate::dynamic_sql::template::SqlTemplate;
 use crate::error::Result;
-use crate::{build_dynamic_params, new_query_type};
 
 use super::sql_helpers;
 
@@ -107,7 +105,7 @@ pub fn prepare_template_engine<T: IntoIterator<Item = I>, I: SqlTemplate>(
 }
 
 /// It doesn't make sense to have a separate trait for this method, the bounds are confusing and redundant.
-fn render_dynamic_sql<T>(
+pub fn render_dynamic_sql<T>(
     handlebars: &Handlebars<'_>,
     t: &T,
     params: &Vec<DynamicParam<'_>>,
@@ -128,6 +126,7 @@ mod dog {
     use rusqlite::params;
 
     use super::*;
+    use crate::new_query_type;
 
     lazy_static! {
         static ref DDL: Vec<&'static str> = vec![
@@ -175,15 +174,13 @@ mod dog {
     }
 
     new_query_type!(
-        DogQuery, 'q,
+        (DogQuery, 'q,
         -> name: &'q str, color: &'q str,
-        => weight_upper: f32, weight_lower: f32,
-    );
+        => weight_upper: f32, weight_lower: f32,)
 
-    new_query_type!(
-        DogUpdate, 'q,
+        (DogUpdate, 'q,
         => color: &'q str, weight: f32,
-        &> query: DogQuery<'q>,
+        &> query: DogQuery<'q>,)
     );
 
     pub struct DogStore<'reg>(Repository<'reg>);
@@ -237,6 +234,7 @@ mod test {
 
     use super::dog::*;
     use super::*;
+    use crate::new_query_type;
 
     #[test]
     fn test_handlerbar() {
@@ -376,15 +374,13 @@ mod test {
     #[test]
     fn test_new_query_type() {
         new_query_type!(
-            FooQuery, 'q,
+            (FooQuery, 'q,
             -> name: &'q str, color: &'q str,
-            => weight_upper: f32, weight_lower: f32,
-        );
+            => weight_upper: f32, weight_lower: f32,)
 
-        new_query_type!(
-            FooUpdate, 'q,
+            (FooUpdate, 'q,
             => name: &'q str, color: &'q str,
-            &> query: FooQuery<'q>,
+            &> query: FooQuery<'q>,)
         );
 
         let q = FooQuery {
