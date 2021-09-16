@@ -1,3 +1,5 @@
+#![cfg(feature="lang")]
+
 #[macro_export]
 macro_rules! enum_to_str {
     ($vis:vis $name:ident, $default:ident, $($var:ident,)+) => {
@@ -11,8 +13,17 @@ macro_rules! enum_to_str {
             $default,
         }
 
-        impl<T: AsRef<str>> From<T> for $name {
-            fn from(str: T) -> Self {
+        impl From<$name> for &'static str {
+            fn from(v: $name) -> Self {
+                match v {
+                    $($name::$var => stringify!($var),)+
+                    $name::$default => stringify!($default),
+                }
+            }
+        }
+
+        impl<T: AsRef<str>+?Sized> From<&T> for $name {
+            fn from(str: &T) -> Self {
                 let key = str.as_ref().to_case(Case::UpperCamel);
                 match key.as_str() {
                     $(stringify!($var)=>$name::$var,)+
@@ -23,11 +34,8 @@ macro_rules! enum_to_str {
 
         impl Display for $name {
             fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-                let s = match self {
-                    $($name::$var => stringify!($var).to_case(Case::Snake),)+
-                    $name::$default => stringify!($default).to_case(Case::Snake),
-                };
-                write!(f, "{}", s)
+                let s = <&str>::from(self.clone()).to_case(Case::Snake);
+                write!(f, "{}", &s)
             }
         }
     }

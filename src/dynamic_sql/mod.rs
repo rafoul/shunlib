@@ -1,3 +1,4 @@
+#![cfg(feature="dynamic_sql")]
 pub use executor::{DynamicParam, DynamicSqlExecutor, Repository};
 pub use handlebars_helpers::sql_helpers;
 pub use template::SqlTemplate;
