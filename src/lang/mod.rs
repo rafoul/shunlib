@@ -7,7 +7,7 @@ macro_rules! enum_to_str {
         use core::fmt::{Display, Formatter};
         use serde::{Serialize, Deserialize};
 
-        #[derive(Debug, Hash, PartialEq, Eq, Clone, Serialize, Deserialize)]
+        #[derive(Debug, Hash, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
         $vis enum $name {
             $($var,)+
             $default,
@@ -29,6 +29,12 @@ macro_rules! enum_to_str {
                     $(stringify!($var)=>$name::$var,)+
                     _ => $name::$default,
                 }
+            }
+        }
+
+        impl $name {
+            pub fn all() -> Vec<$name> {
+                vec![$(Self::$var,)+]
             }
         }
 
@@ -58,5 +64,10 @@ mod test {
         for (v, expected) in values {
             assert_eq!(expected, Color::from(v));
         }
+        assert_eq!(
+          vec![Color::Red, Color::Green],
+            Color::all(),
+        );
+        println!("{}", "bt 4 g".to_case(Case::UpperCamel));
     }
 }
