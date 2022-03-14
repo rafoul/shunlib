@@ -84,7 +84,7 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
         let q = render_dynamic_sql(&self.handlebars, template, &params)?;
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt
-            .query_map(params.as_slice() as &[(&str, &dyn ToSql)], f)?
+            .query_map(params.as_slice(), f)?
             .flat_map(|mapped_row| match mapped_row {
                 Ok(inst) => Some(inst),
                 Err(err) => {

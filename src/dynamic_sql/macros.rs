@@ -13,12 +13,20 @@ macro_rules! build_dynamic_params {
     }
 }
 
-/// This is kind of like reflection because we need the names of fields to construct the dynamic
-/// query. The syntax is as below:
+/// Macro for defining query types. Query types serve two purposes. On one hand they are used for
+/// collecting user inputs. On the other hand, they can be turned into parameters that can be directly
+/// used for executing SQL queries.
+/// Typically there are two locations parameters can appear in a SQL statement. One is for writing
+/// values, e.g. in `SET` or `INSERT`. The other is in `WHERE` clause. It is possible that one field
+/// in a query type appears at both locations in one SQL statement, typically in an `UPDATE` statement that
+/// contains `WHERE` clause. Under such a case, it is desired to make them as two separate parameters.
+///
+/// The syntax is as below:
 /// `->`: fields that appears in both queries and updates, the param used in queries will be prefixed
 /// with `':q_'`.
 /// `=>`: fields that appears in either queries or updates but not both.
-/// `&>`: fields that reference other query types.
+/// `&>`: fields that reference other query types. Fields in referenced types are treated as if they
+/// were defined as part of the referencing type.
 #[macro_export]
 macro_rules! new_query_type {
     (
