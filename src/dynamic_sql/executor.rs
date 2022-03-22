@@ -23,17 +23,17 @@ pub type DynamicParam<'p> = (&'static str, &'p dyn ToSql);
 /// the final SQL can only be determined at runtime, generated from a template based on runtime parameters.
 pub trait DynamicSqlExecutor {
     /// Perform a query and return result, which is handled by `f`.
-    fn query<'p, S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
+    fn query<S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,
-        P: Into<Vec<DynamicParam<'p>>>,
+        for<'a> &'a P: Into<Vec<DynamicParam<'a>>>,
         F: FnMut(&Row<'_>) -> rusqlite::Result<T>;
 
     /// Execute a query and returns the number of rows that are affected.
-    fn execute<'p, S, P>(&self, template: &S, params: P) -> Result<usize>
+    fn execute<S, P>(&self, template: &S, params: P) -> Result<usize>
     where
         S: SqlTemplate,
-        P: Into<Vec<DynamicParam<'p>>>;
+        for<'a> &'a P: Into<Vec<DynamicParam<'a>>>;
 }
 
 /// Basic construct for performing Dynamic SQL queries.
@@ -74,13 +74,13 @@ impl<'reg> Repository<'reg> {
 }
 
 impl<'reg> DynamicSqlExecutor for Repository<'reg> {
-    fn query<'p, S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
+    fn query<S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,
-        P: Into<Vec<DynamicParam<'p>>>,
+        for<'a> &'a P: Into<Vec<DynamicParam<'a>>>,
         F: FnMut(&Row<'_>) -> rusqlite::Result<T>,
     {
-        let params = params.into();
+        let params = (&params).into();
         let q = render_dynamic_sql(&self.handlebars, template, &params)?;
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt
@@ -95,12 +95,12 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
         Ok(Vec::from_iter(result))
     }
 
-    fn execute<'p, S, P>(&self, template: &S, params: P) -> Result<usize>
+    fn execute<S, P>(&self, template: &S, params: P) -> Result<usize>
     where
         S: SqlTemplate,
-        P: Into<Vec<DynamicParam<'p>>>,
+        for<'a> &'a P: Into<Vec<DynamicParam<'a>>>,
     {
-        let params = params.into();
+        let params = (&params).into();
         let q = render_dynamic_sql(&self.handlebars, template, &params)?;
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt.execute(params.as_slice() as &[(&str, &dyn ToSql)])?;
@@ -131,6 +131,7 @@ mod dog {
         "INSERT INTO dogs(name, color, weight) VALUES(:name, :color, :weight)",
     );
 
+    /// See (segment-literal notation)[https://handlebarsjs.com/guide/expressions.html#changing-the-context]
     pub const Q_DOGS_UPDATE: (&str, &str) = (
         "Q_DOGS_UPDATE",
         "UPDATE dogs{{#set}}\
@@ -199,11 +200,11 @@ mod dog {
         }
 
         pub(crate) fn update(&self, update: DogUpdate) -> Result<usize> {
-            self.0.execute(&Q_DOGS_UPDATE, &update)
+            self.0.execute(&Q_DOGS_UPDATE, update)
         }
 
         pub(crate) fn list(&self, query: DogQuery) -> Result<Vec<Dog>> {
-            self.0.query(&Q_DOGS_SELECT, &query, |row| {
+            self.0.query(&Q_DOGS_SELECT, query, |row| {
                 Ok(Dog {
                     name: row.get("name").unwrap(),
                     color: row.get("color").unwrap(),
@@ -227,13 +228,13 @@ mod test {
     fn test_handlerbar() {
         let mut handlebars = Handlebars::new();
         handlebars
-            .register_template_string("foo", "aaa {{> BAR }}")
+            .register_template_string("foo", "{{#if [:name]}}q{{/if}} {{> BAR }}")
             .unwrap();
         handlebars.register_partial("BAR", "this is bar").unwrap();
         let s = handlebars
             .render(
                 "foo",
-                &HashMap::<&str, &str>::from_iter(vec![("name", "aaa"), ("value", "bbb")]),
+                &HashMap::<&str, &str>::from_iter(vec![(":name", "aaa"), ("value", "bbb")]),
             )
             .unwrap();
         println!("{}", s);
