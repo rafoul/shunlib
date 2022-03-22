@@ -82,6 +82,7 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
     {
         let params = (&params).into();
         let q = render_dynamic_sql(&self.handlebars, template, &params)?;
+        log::debug!("{}", &q);
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt
             .query_map(params.as_slice(), f)?
@@ -102,6 +103,7 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
     {
         let params = (&params).into();
         let q = render_dynamic_sql(&self.handlebars, template, &params)?;
+        log::debug!("{}", &q);
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt.execute(params.as_slice() as &[(&str, &dyn ToSql)])?;
         Ok(result)
