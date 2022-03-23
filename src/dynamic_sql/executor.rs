@@ -23,6 +23,7 @@ pub type DynamicParam<'p> = (&'static str, &'p dyn ToSql);
 /// the final SQL can only be determined at runtime, generated from a template based on runtime parameters.
 pub trait DynamicSqlExecutor {
     /// Perform a query and return result, which is handled by `f`.
+    /// Note [Into] is for `&P` instead of for `P`, see [new_query_type] for details.
     fn query<S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
     where
         S: SqlTemplate,

@@ -31,9 +31,11 @@ macro_rules! build_dynamic_params {
 /// `&>`: fields that reference other query types. Fields in referenced types are treated as if they are defined as part of the referencing type.
 ///
 /// # Implementation
-/// Note how the [From] trait is implemented, it is for the reference type. This is because only references
-/// can be cast into `[dyn ToSql]`. And it is common for the query type to hold primitive values. If we
-/// take an owned type then we cannot return references to its primitive fields.
+/// Note the [From] trait is implemented for the reference type. What we do here is basically turning
+/// parameter values into a [Vec] of trait objects. Because trait object has to be accessed through
+/// pointers and according to [trait object](https://doc.rust-lang.org/1.30.0/book/first-edition/trait-objects.html#dynamic-dispatch),
+/// only references of concrete type objects can be turned into references of trait objects. And in
+/// order for these references to be valid as return value, we must use reference as input value.
 #[macro_export]
 macro_rules! new_query_type {
     (
