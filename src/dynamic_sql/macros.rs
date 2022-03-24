@@ -71,7 +71,7 @@ macro_rules! new_query_type {
 
         impl<'a$(, $l)?> From<&'a $s$(<$l>)?> for Vec<(&str, &'a dyn ToSql)> {
             #[warn(unused_mut)]
-            fn from(q: &'a $s<'q>) -> Self {
+            fn from(q: &'a $s$(<$l>)?) -> Self {
                  let v = build_dynamic_params!(
                     $( $( (concat!(":q_", stringify!($f)), q.$f), )* )?
                     $( $( (concat!(":", stringify!($f1)), q.$f1), )* )?
