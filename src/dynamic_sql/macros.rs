@@ -41,7 +41,7 @@ macro_rules! new_query_type {
     (
         $(
             (
-                $s:ident, $l:lifetime,
+                $s:ident, $( $l:lifetime )?,
                 $( -> $($f:ident: $t:ty,)* )?
                 $( => $($f1:ident: $t1:ty,)* )?
                 $( &> $($r:ident: $rt:ty,)* )?
@@ -53,13 +53,13 @@ macro_rules! new_query_type {
 
         $(
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-        pub struct $s<$l> {
+        pub struct $s$(<$l>)? {
             $( $( pub $f: Option<$t>, )* )?
             $( $( pub $f1: Option<$t1>, )* )?
             $( $( pub $r: $rt, )* )?
         }
 
-        impl Default for $s<'_> {
+        impl$(<$l>)? Default for $s$(<$l>)? {
             fn default() -> Self {
                 $s {
                     $( $( $f: None, )* )?
@@ -69,7 +69,7 @@ macro_rules! new_query_type {
             }
         }
 
-        impl<'a, 'q> From<&'a $s<'q>> for Vec<(&str, &'a dyn ToSql)> {
+        impl<'a$(, $l)?> From<&'a $s$(<$l>)?> for Vec<(&str, &'a dyn ToSql)> {
             #[warn(unused_mut)]
             fn from(q: &'a $s<'q>) -> Self {
                  let v = build_dynamic_params!(
