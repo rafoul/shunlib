@@ -41,7 +41,7 @@ macro_rules! new_query_type {
     (
         $(
             (
-                $s:ident, $( $l:lifetime )?,
+                $s:ident, $( $l:lifetime, )?
                 $( -> $($f:ident: $t:ty,)* )?
                 $( => $($f1:ident: $t1:ty,)* )?
                 $( &> $($r:ident: $rt:ty,)* )?
