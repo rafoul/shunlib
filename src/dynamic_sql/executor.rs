@@ -38,6 +38,9 @@ pub trait DynamicSqlExecutor {
 }
 
 /// Basic construct for performing Dynamic SQL queries.
+/// NOTE: This struct is not [Sync] because [Connection] contains a [RefCell] and thus is not [Sync].
+/// On the other hand, [Handlebars] is [Sync].
+/// This indicates that it need to be wrapped inside a [Mutex] when used in a multi-threaded context.
 pub struct Repository<'reg> {
     pub conn: Connection,
     handlebars: Handlebars<'reg>,
