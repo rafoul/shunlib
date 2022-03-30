@@ -151,11 +151,11 @@ mod dog {
 
     new_query_type!(
         (DogQuery, 'q,
-        p> q_name: &'q str, q_color: &'q str,
+        -> q_name: &'q str, q_color: &'q str,
             weight_upper: f32, weight_lower: f32,)
 
         (DogUpdate, 'q,
-        p> color: &'q str, weight: f32,
+        -> color: &'q str, weight: f32,
         &> query: DogQuery<'q>,)
     );
 
@@ -345,11 +345,11 @@ mod test {
     fn test_new_query_type() {
         new_query_type!(
             (FooQuery, 'q,
-            p> q_name: &'q str, q_color: &'q str,
+            -> q_name: &'q str, q_color: &'q str,
                 weight_upper: f32, weight_lower: f32,)
 
             (FooUpdate, 'q,
-            p> name: &'q str, color: &'q str,
+            -> name: &'q str, color: &'q str,
             &> query: FooQuery<'q>,)
         );
 

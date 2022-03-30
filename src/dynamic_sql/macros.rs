@@ -26,8 +26,8 @@ macro_rules! build_dynamic_params {
 /// as references. But this is not always necessary because primitive types are usually not borrowed.
 ///
 /// The syntax is as below:
-/// `p>`: parameters used in phase 2 as mentioned above.
-/// `c>`: parameters used in phase 1 as mentioned above
+/// `->`: parameters used in phase 2 as mentioned above.
+/// `=>`: parameters used in phase 1 as mentioned above
 /// `&>`: fields that reference other query types. Fields in referenced types are treated as if they
 /// are defined as part of the referencing type. Please note that fields should be named differently
 /// if they happen to have the same name in referenced types and the referencing type. For example,
@@ -39,15 +39,15 @@ macro_rules! new_query_type {
         $(
             (
                 $s:ident, $( $l:lifetime, )?
-                $( p> $($pf:ident: $pt:ty,)* )?
-                $( c> $($cf:ident: $ct:ty,)* )?
+                $( -> $($pf:ident: $pt:ty,)* )?
+                $( => $($cf:ident: $ct:ty,)* )?
                 $( &> $($r:ident: $rt:ty,)* )?
             )
         )+
     ) => {
         use serde::{Deserialize, Serialize};
         use $crate::build_dynamic_params;
-         use std::collections::HashMap;
+        use std::collections::HashMap;
 
         $(
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
