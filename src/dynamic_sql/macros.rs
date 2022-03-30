@@ -47,6 +47,7 @@ macro_rules! new_query_type {
     ) => {
         use serde::{Deserialize, Serialize};
         use $crate::build_dynamic_params;
+         use std::collections::HashMap;
 
         $(
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
