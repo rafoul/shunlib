@@ -9,6 +9,10 @@ pub enum Error {
     DatabaseError(#[from] rusqlite::Error),
 
     #[cfg(feature = "dynamic_sql")]
+    #[error("error converting from SQLite value")]
+    FromSqlError(#[from] rusqlite::types::FromSqlError),
+
+    #[cfg(feature = "dynamic_sql")]
     #[error("error while rendering template")]
     TemplateRenderError(#[from] handlebars::RenderError),
 

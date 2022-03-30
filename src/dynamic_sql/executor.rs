@@ -4,20 +4,13 @@ use std::path::Path;
 
 use handlebars::Handlebars;
 use rusqlite::{Connection, Row, ToSql};
+use crate::dynamic_sql::query::DynamicQueryParameters;
 
 use crate::dynamic_sql::template::SqlTemplate;
 use crate::error::Result;
 
 use super::sql_helpers;
 
-/// [DynamicParam] represents a key-value pair that is going to be used in a Dynamic SQL query.
-/// Typically the end user will not construct it directly but will use query object which can be
-/// converted into a [Vec<DynamicParam>].
-///
-/// The value can be of different types so it has to be boxed. The key is `'static` because we know
-/// at compile time the keys of query parameters. What we need to do at runtime is to determine which
-/// keys need to be present by checking their values.
-pub type DynamicParam<'p> = (&'static str, &'p dyn ToSql);
 
 /// [DynamicSqlExecutor] is the interface for performing Dynamic SQL queries. A query is dynamic if
 /// the final SQL can only be determined at runtime, generated from a template based on runtime parameters.
@@ -25,16 +18,16 @@ pub trait DynamicSqlExecutor {
     /// Perform a query and return result, which is handled by `f`.
     /// Note [Into] is for `&P` instead of for `P`, see [new_query_type] for details.
     fn query<S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
-    where
-        S: SqlTemplate,
-        for<'a> &'a P: Into<Vec<DynamicParam<'a>>>,
-        F: FnMut(&Row<'_>) -> rusqlite::Result<T>;
+        where
+            S: SqlTemplate,
+            P: DynamicQueryParameters,
+            F: FnMut(&Row<'_>) -> rusqlite::Result<T>;
 
     /// Execute a query and returns the number of rows that are affected.
     fn execute<S, P>(&self, template: &S, params: P) -> Result<usize>
-    where
-        S: SqlTemplate,
-        for<'a> &'a P: Into<Vec<DynamicParam<'a>>>;
+        where
+            S: SqlTemplate,
+            P: DynamicQueryParameters;
 }
 
 /// Basic construct for performing Dynamic SQL queries.
@@ -46,23 +39,12 @@ pub struct Repository<'reg> {
     handlebars: Handlebars<'reg>,
 }
 
-/// Render dynamic SQL with a reference to parameters.
-fn render_dynamic_sql<T: SqlTemplate>(
-    handlebars: &Handlebars<'_>,
-    t: &T,
-    params: &Vec<DynamicParam<'_>>,
-) -> Result<String> {
-    let ctx = HashMap::<&str, bool>::from_iter(params.into_iter().map(|(k, _)| (*k, true)));
-    let rendered = handlebars.render(t.name(), &ctx)?;
-    Ok(rendered)
-}
-
 impl<'reg> Repository<'reg> {
     pub fn new<'a, P, T, I>(file: &P, templates: &'a T) -> Result<Self>
-    where
-        P: AsRef<Path> + ?Sized,
-        &'a T: IntoIterator<Item = &'a I>,
-        I: SqlTemplate + 'a,
+        where
+            P: AsRef<Path> + ?Sized,
+            &'a T: IntoIterator<Item = &'a I>,
+            I: SqlTemplate + 'a,
     {
         let conn = Connection::open(file)?;
         let mut handlebars = Handlebars::new();
@@ -79,17 +61,16 @@ impl<'reg> Repository<'reg> {
 
 impl<'reg> DynamicSqlExecutor for Repository<'reg> {
     fn query<S, P, F, T>(&self, template: &S, params: P, f: F) -> Result<Vec<T>>
-    where
-        S: SqlTemplate,
-        for<'a> &'a P: Into<Vec<DynamicParam<'a>>>,
-        F: FnMut(&Row<'_>) -> rusqlite::Result<T>,
+        where
+            S: SqlTemplate,
+            P: DynamicQueryParameters,
+            F: FnMut(&Row<'_>) -> rusqlite::Result<T>,
     {
-        let params = (&params).into();
-        let q = render_dynamic_sql(&self.handlebars, template, &params)?;
+        let q = self.handlebars.render(template.name(), &params.for_render())?;
         log::debug!("{}", &q);
         let mut stmt = self.conn.prepare(&q)?;
         let result = stmt
-            .query_map(params.as_slice(), f)?
+            .query_map(params.for_execution().as_slice(), f)?
             .flat_map(|mapped_row| match mapped_row {
                 Ok(inst) => Some(inst),
                 Err(err) => {
@@ -101,15 +82,14 @@ impl<'reg> DynamicSqlExecutor for Repository<'reg> {
     }
 
     fn execute<S, P>(&self, template: &S, params: P) -> Result<usize>
-    where
-        S: SqlTemplate,
-        for<'a> &'a P: Into<Vec<DynamicParam<'a>>>,
+        where
+            S: SqlTemplate,
+            P: DynamicQueryParameters,
     {
-        let params = (&params).into();
-        let q = render_dynamic_sql(&self.handlebars, template, &params)?;
+        let q = self.handlebars.render(template.name(), &params.for_render())?;
         log::debug!("{}", &q);
         let mut stmt = self.conn.prepare(&q)?;
-        let result = stmt.execute(params.as_slice() as &[(&str, &dyn ToSql)])?;
+        let result = stmt.execute(params.for_execution().as_slice())?;
         Ok(result)
     }
 }
@@ -121,6 +101,7 @@ mod dog {
     use rusqlite::params;
 
     use crate::new_query_type;
+    use crate::dynamic_sql::{DynamicParam, ToSqlSegment};
 
     use super::*;
 
@@ -170,11 +151,11 @@ mod dog {
 
     new_query_type!(
         (DogQuery, 'q,
-        -> name: &'q str, color: &'q str,
-        => weight_upper: f32, weight_lower: f32,)
+        p> q_name: &'q str, q_color: &'q str,
+            weight_upper: f32, weight_lower: f32,)
 
         (DogUpdate, 'q,
-        => color: &'q str, weight: f32,
+        p> color: &'q str, weight: f32,
         &> query: DogQuery<'q>,)
     );
 
@@ -226,6 +207,7 @@ mod test {
     use std::{env, fs};
 
     use crate::new_query_type;
+    use crate::dynamic_sql::{DynamicParam, ToSqlSegment};
 
     use super::dog::*;
     use super::*;
@@ -266,16 +248,11 @@ mod test {
                 "UPDATE dogs SET color=:color",
             ),
         ]
-        .into_iter()
+            .into_iter()
         {
             assert_eq!(
                 q,
-                render_dynamic_sql(
-                    &handlebars,
-                    &Q_DOGS_UPDATE,
-                    &Into::<Vec<DynamicParam>>::into(&update)
-                )
-                .unwrap()
+                handlebars.render(Q_DOGS_UPDATE.name(), &update.for_render()).unwrap(),
             );
         }
     }
@@ -286,23 +263,23 @@ mod test {
         for (params, q) in vec![
             (
                 DogQuery {
-                    name: Some("aaa"),
+                    q_name: Some("aaa"),
                     ..Default::default()
                 },
                 "SELECT * FROM dogs WHERE name LIKE '%' || :q_name || '%'",
             ),
             (
                 DogQuery {
-                    name: Some("aaa"),
-                    color: Some("white"),
+                    q_name: Some("aaa"),
+                    q_color: Some("white"),
                     ..Default::default()
                 },
                 "SELECT * FROM dogs WHERE name LIKE '%' || :q_name || '%' AND color=:q_color",
             ),
             (
                 DogQuery {
-                    name: Some("aaa"),
-                    color: Some("white"),
+                    q_name: Some("aaa"),
+                    q_color: Some("white"),
                     weight_upper: Some(50.5),
                     weight_lower: Some(10.5),
                 },
@@ -316,10 +293,9 @@ mod test {
                 "SELECT * FROM dogs",
             ),
         ] {
-            let params = Into::<Vec<DynamicParam>>::into(&params);
             assert_eq!(
                 q,
-                render_dynamic_sql(&handlebars, &Q_DOGS_SELECT, &params).unwrap()
+                handlebars.render(Q_DOGS_SELECT.name(), &params.for_render()).unwrap()
             )
         }
     }
@@ -341,7 +317,7 @@ mod test {
         store.add(dog.clone()).unwrap();
 
         let mut query = DogQuery {
-            color: Some("white"),
+            q_color: Some("white"),
             ..Default::default()
         };
         let query_fn = |q: DogQuery| store.list(q).unwrap();
@@ -354,7 +330,7 @@ mod test {
             query: query.clone(),
         };
         store.update(update.clone()).unwrap();
-        query.color = update.color;
+        query.q_color = update.color;
         let query_result = query_fn(query.clone());
         let updated = &query_result[0];
         assert_eq!(update.color.as_ref().unwrap(), &updated.color,);
@@ -369,21 +345,21 @@ mod test {
     fn test_new_query_type() {
         new_query_type!(
             (FooQuery, 'q,
-            -> name: &'q str, color: &'q str,
-            => weight_upper: f32, weight_lower: f32,)
+            p> q_name: &'q str, q_color: &'q str,
+                weight_upper: f32, weight_lower: f32,)
 
             (FooUpdate, 'q,
-            => name: &'q str, color: &'q str,
+            p> name: &'q str, color: &'q str,
             &> query: FooQuery<'q>,)
         );
 
         let q = FooQuery {
-            name: Some("aaa"),
+            q_name: Some("aaa"),
             ..Default::default()
         };
-        assert_eq!(Some("aaa"), q.name);
-        assert_eq!(None, q.color);
-        assert_eq!(1, Vec::<(&str, &dyn ToSql)>::from(&q).len());
+        assert_eq!(Some("aaa"), q.q_name);
+        assert_eq!(None, q.q_color);
+        assert_eq!(1, q.for_execution().len());
 
         let u = FooUpdate {
             name: Some("bbb"),
@@ -392,7 +368,7 @@ mod test {
         };
         assert_eq!(Some("bbb"), u.name);
         assert_eq!(None, u.color);
-        assert_eq!(Some("aaa"), u.query.name);
+        assert_eq!(Some("aaa"), u.query.q_name);
     }
 
     fn get_template_engine() -> Handlebars<'static> {

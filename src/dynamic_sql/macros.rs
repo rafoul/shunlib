@@ -15,35 +15,32 @@ macro_rules! build_dynamic_params {
     }
 }
 
-/// Macro for defining query types. Query types serve two purposes. On one hand they are used for
-/// collecting user inputs. On the other hand, they can be turned into parameters that can be directly
-/// used for executing SQL queries.
+/// Macro for defining query types. Query types is used for collecting parameter values which are
+/// used for SQL statements and can only be known at runtime.   There are two phases for processing
+/// dynamic queries:
+/// 1. Rendering the SQL template into string. Some parameters are replaced by their values at this
+/// phase, e.g. `limit`.
+/// 2. Execute the SQL statement and provide values for bind parameters.
 ///
-/// Typically there are two locations parameters can appear in a SQL statement. One is for writing
-/// values, e.g. in `SET` or `INSERT`. The other is in `WHERE` clause. It is possible that one field
-/// in a query type appears at both locations in one SQL statement, typically in an `UPDATE` statement that
-/// contains `WHERE` clause. Under such a case, it is desired to make them as two separate parameters.
+/// The lifetime for the query type is optional. Sometimes it might be convenient to provide the input
+/// as references. But this is not always necessary because primitive types are usually not borrowed.
 ///
 /// The syntax is as below:
-/// `->`: fields that appears in both queries and updates, the param used in queries will be prefixed
-/// with `':q_'`.
-/// `=>`: fields that appears in either queries or updates but not both.
-/// `&>`: fields that reference other query types. Fields in referenced types are treated as if they are defined as part of the referencing type.
-///
-/// # Implementation
-/// Note the [From] trait is implemented for the reference type. What we do here is basically turning
-/// parameter values into a [Vec] of trait objects. Because trait object has to be accessed through
-/// pointers and according to [trait object](https://doc.rust-lang.org/1.30.0/book/first-edition/trait-objects.html#dynamic-dispatch),
-/// only references of concrete type objects can be turned into references of trait objects. And in
-/// order for these references to be valid as return value, we must use reference as input value.
+/// `p>`: parameters used in phase 2 as mentioned above.
+/// `c>`: parameters used in phase 1 as mentioned above
+/// `&>`: fields that reference other query types. Fields in referenced types are treated as if they
+/// are defined as part of the referencing type. Please note that fields should be named differently
+/// if they happen to have the same name in referenced types and the referencing type. For example,
+/// if `FooUpdate` reference `FooQuery` and `name` appears in both, then one should named like `q_name`
+/// while the other is `name`.
 #[macro_export]
 macro_rules! new_query_type {
     (
         $(
             (
                 $s:ident, $( $l:lifetime, )?
-                $( -> $($f:ident: $t:ty,)* )?
-                $( => $($f1:ident: $t1:ty,)* )?
+                $( p> $($pf:ident: $pt:ty,)* )?
+                $( c> $($cf:ident: $ct:ty,)* )?
                 $( &> $($r:ident: $rt:ty,)* )?
             )
         )+
@@ -54,35 +51,49 @@ macro_rules! new_query_type {
         $(
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $s$(<$l>)? {
-            $( $( pub $f: Option<$t>, )* )?
-            $( $( pub $f1: Option<$t1>, )* )?
+            $( $( pub $pf: Option<$pt>, )* )?
+            $( $( pub $cf: Option<$ct>, )* )?
             $( $( pub $r: $rt, )* )?
         }
 
         impl$(<$l>)? Default for $s$(<$l>)? {
             fn default() -> Self {
                 $s {
-                    $( $( $f: None, )* )?
-                    $( $( $f1: None, )* )?
+                    $( $( $pf: None, )* )?
+                    $( $( $cf: None, )* )?
                     $( $( $r: Default::default(), )* )?
                 }
             }
         }
 
-        impl<'a$(, $l)?> From<&'a $s$(<$l>)?> for Vec<(&str, &'a dyn ToSql)> {
-            #[warn(unused_mut)]
-            fn from(q: &'a $s$(<$l>)?) -> Self {
-                 let v = build_dynamic_params!(
-                    $( $( (concat!(":q_", stringify!($f)), q.$f), )* )?
-                    $( $( (concat!(":", stringify!($f1)), q.$f1), )* )?
-                 );
-                 $(
+        impl$(<$l>)? DynamicQueryParameters for $s$(<$l>)? {
+            fn for_render(&self) -> HashMap<&'static str, String> {
+                let v = build_dynamic_params!(
+                    $( $( (concat!(":", stringify!($pf)), self.$pf), )* )?
+                    $( $( (concat!(":", stringify!($cf)), self.$cf), )* )?
+                );
+                let v = HashMap::<&'static str, String>::from_iter(
+                    v.into_iter().map(|(k, v)| (k, v.to_sql_segment().unwrap_or("".to_string()))),
+                );
+                $(
                     let mut v = v;
-                    $( v.append(&mut (&q.$r).into()); )*
-                 )?
-                 v
+                    $( v.extend(self.$r.for_render()); )*
+                )?
+                v
+            }
+
+            fn for_execution(&self) -> Vec<DynamicParam<'_>> {
+                let v = build_dynamic_params!(
+                    $( $( (concat!(":", stringify!($pf)), self.$pf), )* )?
+                );
+                $(
+                    let mut v = v;
+                    $( v.append(&mut self.$r.for_execution()); )*
+                )?
+                v
             }
         }
+
         )+
     }
 }
