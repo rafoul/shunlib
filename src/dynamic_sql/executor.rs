@@ -366,6 +366,7 @@ mod test {
             query: Some(q.clone()),
             ..Default::default()
         };
+        // println!("{}", serde_json::to_string_pretty(&u).unwrap());
         assert_eq!(Some("bbb"), u.name);
         assert_eq!(None, u.color);
         assert_eq!(Some("aaa"), u.query.as_ref().map(|it| it.q_name).flatten());

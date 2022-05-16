@@ -54,7 +54,12 @@ macro_rules! new_query_type {
         pub struct $s$(<$l>)? {
             $( $( pub $pf: Option<$pt>, )* )?
             $( $( pub $cf: Option<$ct>, )* )?
-            $( $( pub $r: Option<$rt>, )* )?
+            $(
+                $(
+                    #[serde(flatten)]
+                    pub $r: Option<$rt>,
+                )*
+            )?
         }
 
         impl$(<$l>)? Default for $s$(<$l>)? {
