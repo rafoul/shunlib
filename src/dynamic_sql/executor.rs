@@ -327,7 +327,7 @@ mod test {
         let update = DogUpdate {
             color: Some("yellow"),
             weight: Some(30.2),
-            query: query.clone(),
+            query: Some(query.clone()),
         };
         store.update(update.clone()).unwrap();
         query.q_color = update.color;
@@ -363,12 +363,12 @@ mod test {
 
         let u = FooUpdate {
             name: Some("bbb"),
-            query: q.clone(),
+            query: Some(q.clone()),
             ..Default::default()
         };
         assert_eq!(Some("bbb"), u.name);
         assert_eq!(None, u.color);
-        assert_eq!(Some("aaa"), u.query.q_name);
+        assert_eq!(Some("aaa"), u.query.as_ref().map(|it| it.q_name).flatten());
     }
 
     fn get_template_engine() -> Handlebars<'static> {

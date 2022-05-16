@@ -54,7 +54,7 @@ macro_rules! new_query_type {
         pub struct $s$(<$l>)? {
             $( $( pub $pf: Option<$pt>, )* )?
             $( $( pub $cf: Option<$ct>, )* )?
-            $( $( pub $r: $rt, )* )?
+            $( $( pub $r: Option<$rt>, )* )?
         }
 
         impl$(<$l>)? Default for $s$(<$l>)? {
@@ -62,7 +62,7 @@ macro_rules! new_query_type {
                 $s {
                     $( $( $pf: None, )* )?
                     $( $( $cf: None, )* )?
-                    $( $( $r: Default::default(), )* )?
+                    $( $( $r: None, )* )?
                 }
             }
         }
@@ -77,8 +77,15 @@ macro_rules! new_query_type {
                     v.into_iter().map(|(k, v)| (k, v.to_sql_segment().unwrap_or("".to_string()))),
                 );
                 $(
-                    let mut v = v;
-                    $( v.extend(self.$r.for_render()); )*
+                    $(
+                        let v = if let Some(ref $r) = self.$r {
+                            let mut v = v;
+                            v.extend($r.for_render());
+                            v
+                        } else {
+                            v
+                        };
+                    )*
                 )?
                 v
             }
@@ -88,8 +95,15 @@ macro_rules! new_query_type {
                     $( $( (concat!(":", stringify!($pf)), self.$pf), )* )?
                 );
                 $(
-                    let mut v = v;
-                    $( v.append(&mut self.$r.for_execution()); )*
+                    $(
+                        let v = if let Some(ref $r) = self.$r {
+                            let mut v = v;
+                            v.append(&mut $r.for_execution());
+                            v
+                        } else {
+                            v
+                        };
+                    )*
                 )?
                 v
             }
