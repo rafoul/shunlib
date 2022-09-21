@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::path::Path;
 
@@ -211,22 +210,6 @@ mod test {
 
     use super::dog::*;
     use super::*;
-
-    #[test]
-    fn test_handlerbar() {
-        let mut handlebars = Handlebars::new();
-        handlebars
-            .register_template_string("foo", "{{#if [:name]}}q{{/if}} {{> BAR }}")
-            .unwrap();
-        handlebars.register_partial("BAR", "this is bar").unwrap();
-        let s = handlebars
-            .render(
-                "foo",
-                &HashMap::<&str, &str>::from_iter(vec![(":name", "aaa"), ("value", "bbb")]),
-            )
-            .unwrap();
-        println!("{}", s);
-    }
 
     #[test]
     fn test_update_query_template() {
