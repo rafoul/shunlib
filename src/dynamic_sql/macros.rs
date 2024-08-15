@@ -2,14 +2,14 @@
 /// into a trait object.
 #[macro_export]
 macro_rules! build_dynamic_params {
-    ( $( ($key:expr, $value:expr), )+ ) => {
+    ( $( $key:expr, $value:expr, )* ) => {
         {
             let mut v = Vec::<(&str, &dyn ToSql)>::new();
             $(
                     if $value.is_some() {
                         v.push(($key, &$value as &dyn rusqlite::ToSql));
                     }
-            )+
+            )*
             v
         }
     }
@@ -75,8 +75,8 @@ macro_rules! new_query_type {
         impl$(<$l>)? DynamicQueryParameters for $s$(<$l>)? {
             fn for_render(&self) -> HashMap<&'static str, String> {
                 let v = build_dynamic_params!(
-                    $( $( (concat!(":", stringify!($pf)), self.$pf), )* )?
-                    $( $( (concat!(":", stringify!($cf)), self.$cf), )* )?
+                    $( $( concat!(":", stringify!($pf)), self.$pf, )* )?
+                    $( $( concat!(":", stringify!($cf)), self.$cf, )* )?
                 );
                 let v = HashMap::<&'static str, String>::from_iter(
                     v.into_iter().map(|(k, v)| (k, v.to_sql_segment().unwrap_or("".to_string()))),
@@ -96,8 +96,8 @@ macro_rules! new_query_type {
             }
 
             fn for_execution(&self) -> Vec<DynamicParam<'_>> {
-                let v = build_dynamic_params!(
-                    $( $( (concat!(":", stringify!($pf)), self.$pf), )* )?
+                 let v = build_dynamic_params!(
+                    $( $( concat!(":", stringify!($pf)), self.$pf, )* )?
                 );
                 $(
                     $(
